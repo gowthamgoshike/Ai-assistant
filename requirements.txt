@@ -1,0 +1,7 @@
+# --- RAG Core Ingestion ---
+pymupdf==1.24.2          # High-performance PDF parsing
+chromadb==0.5.0          # Vector Database for semantic search
+
+# --- Development & Infrastructure ---
+python-dotenv==1.0.1     # Managing environment variables (API keys)
+typing-extensions>=4.6.0 # Backward-compatible type hints
