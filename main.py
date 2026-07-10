@@ -2,6 +2,8 @@
 from fastapi import FastAPI
 from app.api.routes import router
 
+from dotenv import load_dotenv
+load_dotenv() # This loads the variables from .env into your environment
 app = FastAPI(title="RAG AI Assistant")
 
 # Include your routes
