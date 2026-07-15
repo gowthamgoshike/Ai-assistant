@@ -1,6 +1,6 @@
 from fastapi import APIRouter, UploadFile, File
 from pydantic import BaseModel
-from app.ingestion.loader import extract_text_from_pdf
+from app.ingestion.loader import extract_data_from_pdf
 from app.ingestion.splitter import get_chunker
 from app.ingestion.vector_ops import create_vector_store
 from app.rag.agent import agent_executor
@@ -13,7 +13,7 @@ class QueryRequest(BaseModel):
 @router.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
     content = await file.read()
-    text = extract_text_from_pdf(content)
+    pages_data, pdf_meta = extract_data_from_pdf(file_bytes)
     chunks = get_chunker(text)
     create_vector_store(chunks)
     return {"message": "Document ingested successfully."}
