@@ -45,7 +45,9 @@ def ingest_local_directory():
                 file_bytes = f.read()
                 
             text = extract_text_from_pdf(file_bytes)
-            chunks = get_chunker(text)
+            # CORRECT WAY
+            splitter = get_chunker()
+            chunks = splitter.split_text(text)
             
             for chunk in chunks:
                 new_chunks.append(chunk)
