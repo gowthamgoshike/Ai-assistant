@@ -9,7 +9,7 @@ def test_graph():
     print("Testing Local RAG Route...")
     # This invokes the graph state directly
     res_local = agent_executor.invoke({
-        "messages": [("user", "What are the topics in this book ?")]
+        "messages": [("user", "What is the biological family of the domestic dog")]
     })
     print("RAG Response:", res_local["messages"][-1].content)
     print("-" * 40)

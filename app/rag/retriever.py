@@ -53,23 +53,53 @@ def get_relevant_context(query: str):
     print("📊 CROSS-ENCODER RELEVANCE SCORES")
     print(f"{'-'*50}")
     
-    final_strings = []
+    adjusted_docs = []
     
+    # STEP 1: Apply Custom Rules to the Scores
     for doc in compressed_docs:
-        # The CrossEncoderReranker automatically injects the 'relevance_score' into metadata
-        score = doc.metadata.get('relevance_score', 0.0)
-        source = doc.metadata.get('source', 'Unknown')
+        # Extract base metadata
+        base_score = doc.metadata.get('relevance_score', 0.0)
+        source = str(doc.metadata.get('source', 'Unknown')).lower()
         page = doc.metadata.get('page_number', 'N/A')
         
-        # 🛡️ STRICT CUTOFF RULE: Only keep chunks with a positive score
-        if score > 0:
-            print(f"✅ ACCEPTED | Score: {score:.4f} | Page: {page} | Source: {source}")
-            final_strings.append(doc.page_content)
+        final_score = base_score
+        
+        # 🧠 RULE 1: Boost priority for specific high-value files
+        if 'resume' in source or 'cv' in source:
+            final_score += 3.0
+            print(f"📈 BOOSTED (+3.0) | Source: {source} | New Score: {final_score:.4f}")
+            
+        # 🧠 RULE 2: Penalize outdated or secondary files
+        elif 'archive' in source or 'old' in source:
+            final_score -= 2.0
+            print(f"📉 PENALIZED (-2.0) | Source: {source} | New Score: {final_score:.4f}")
+            
+        # Store the adjusted data as a dictionary for easy sorting
+        adjusted_docs.append({
+            'content': doc.page_content,
+            'score': final_score,
+            'source': source,
+            'page': page
+        })
+        
+    # STEP 2: Re-sort the list so the highest scores are at the top (Index 0)
+    adjusted_docs.sort(key=lambda x: x['score'], reverse=True)
+    
+    print(f"\n{'-'*50}")
+    print("🛡️ FINAL RANKING & CUTOFF FILTER")
+    print(f"{'-'*50}")
+    
+    final_strings = []
+    
+    # STEP 3: Apply the strict cutoff to the newly sorted and adjusted list
+    for item in adjusted_docs:
+        if item['score'] > 0:
+            print(f"✅ ACCEPTED | Score: {item['score']:.4f} | Page: {item['page']} | Source: {item['source']}")
+            final_strings.append(item['content'])
         else:
-            print(f"❌ REJECTED | Score: {score:.4f} | Page: {page} | Source: {source} (Irrelevant)")
+            print(f"❌ REJECTED | Score: {item['score']:.4f} | Page: {item['page']} | Source: {item['source']} (Irrelevant)")
             
     print(f"{'-'*50}")
     print(f"Kept {len(final_strings)} highly relevant chunks for the LLM.\n")
     
-    # Return only the vetted text strings to your LangGraph Agent
     return final_strings
