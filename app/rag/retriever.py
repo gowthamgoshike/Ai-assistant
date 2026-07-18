@@ -46,7 +46,30 @@ def get_relevant_context(query: str):
     )
     
     # Execute the master search
+    print(f"\n🔍 Executing Hybrid Search & Reranking for: '{query}'")
     compressed_docs = compression_retriever.invoke(query)
     
-    # Return the highly vetted text strings to your LangGraph Agent
-    return [doc.page_content for doc in compressed_docs]
+    print(f"\n{'-'*50}")
+    print("📊 CROSS-ENCODER RELEVANCE SCORES")
+    print(f"{'-'*50}")
+    
+    final_strings = []
+    
+    for doc in compressed_docs:
+        # The CrossEncoderReranker automatically injects the 'relevance_score' into metadata
+        score = doc.metadata.get('relevance_score', 0.0)
+        source = doc.metadata.get('source', 'Unknown')
+        page = doc.metadata.get('page_number', 'N/A')
+        
+        # 🛡️ STRICT CUTOFF RULE: Only keep chunks with a positive score
+        if score > 0:
+            print(f"✅ ACCEPTED | Score: {score:.4f} | Page: {page} | Source: {source}")
+            final_strings.append(doc.page_content)
+        else:
+            print(f"❌ REJECTED | Score: {score:.4f} | Page: {page} | Source: {source} (Irrelevant)")
+            
+    print(f"{'-'*50}")
+    print(f"Kept {len(final_strings)} highly relevant chunks for the LLM.\n")
+    
+    # Return only the vetted text strings to your LangGraph Agent
+    return final_strings
