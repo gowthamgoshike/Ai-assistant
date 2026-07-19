@@ -1,4 +1,5 @@
-# app/rag/retriever.py
+import os
+import chromadb
 from langchain_chroma import Chroma
 from langchain_community.retrievers import BM25Retriever
 from langchain_classic.retrievers import EnsembleRetriever
@@ -7,14 +8,18 @@ from langchain_classic.retrievers.document_compressors import CrossEncoderRerank
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from app.ingestion.vector_ops import get_embedding_model
 
-PERSIST_DIR = "./data/chroma_db"
-
 def get_relevant_context(query: str):
     """Executes Hybrid Search (Semantic + BM25) and Re-ranks the fused results."""
     
-    # 1. Connect to your dense vector database
+    # 1. Connect to the standalone ChromaDB container over the network
+    chroma_host = os.getenv("CHROMA_HOST", "localhost")
+    chroma_port = int(os.getenv("CHROMA_PORT", 8000))
+    chroma_client = chromadb.HttpClient(host=chroma_host, port=chroma_port)
+    
+    # Target the identical collection name used in vector_ops.py
     vector_db = Chroma(
-        persist_directory=PERSIST_DIR,
+        client=chroma_client,
+        collection_name="rag_collection",
         embedding_function=get_embedding_model()
     )
     
@@ -22,10 +27,15 @@ def get_relevant_context(query: str):
     dense_retriever = vector_db.as_retriever(search_kwargs={"k": 10})
     
     # 2. Keyword Search: Initialize BM25 Sparse Retriever
-    # Extract the raw text chunks directly from the persistent Chroma collection
+    # Extract the raw text chunks directly from the remote Chroma collection
     existing_data = vector_db.get()
-    all_chunks = existing_data['documents'] if existing_data else []
+    all_chunks = existing_data.get('documents', []) if existing_data else []
     
+    # Safeguard: Prevent BM25 from crashing if the database is empty
+    if not all_chunks:
+        print("⚠️ Warning: ChromaDB is empty. Returning no results.")
+        return []
+        
     bm25_retriever = BM25Retriever.from_texts(all_chunks)
     bm25_retriever.k = 10
     
@@ -86,18 +96,15 @@ def get_relevant_context(query: str):
     adjusted_docs.sort(key=lambda x: x['score'], reverse=True)
     
     print(f"\n{'-'*50}")
-    print("🛡️ FINAL RANKING & CUTOFF FILTER")
+    print("🛡️ FINAL RANKING & SELECTION")
     print(f"{'-'*50}")
     
     final_strings = []
     
-    # STEP 3: Apply the strict cutoff to the newly sorted and adjusted list
+    # STEP 3: Allow the top reranked chunks directly into the context window
     for item in adjusted_docs:
-        if item['score'] > 0:
-            print(f"✅ ACCEPTED | Score: {item['score']:.4f} | Page: {item['page']} | Source: {item['source']}")
-            final_strings.append(item['content'])
-        else:
-            print(f"❌ REJECTED | Score: {item['score']:.4f} | Page: {item['page']} | Source: {item['source']} (Irrelevant)")
+        print(f"✅ ACCEPTED | Score: {item['score']:.4f} | Page: {item['page']} | Source: {item['source']}")
+        final_strings.append(item['content'])
             
     print(f"{'-'*50}")
     print(f"Kept {len(final_strings)} highly relevant chunks for the LLM.\n")

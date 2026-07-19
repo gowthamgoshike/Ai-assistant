@@ -45,13 +45,23 @@ async def upload_document(file: UploadFile = File(...)):
         # Read the file directly into memory
         content = await file.read()
         
-        # FIXED: Pass 'content' instead of the undefined 'file_bytes'
+        # Pass 'content' instead of the undefined 'file_bytes'
         pages_data, pdf_meta = extract_data_from_pdf(content)
         
-        # FIXED: Pass 'pages_data' instead of the undefined 'text'
-        chunks = get_chunker(pages_data)
+        # 1. Combine the text from all pages into a single string
+        # (Using safe .get() defaults in case the key is 'text' or 'page_content')
+        full_text = "\n".join([
+            page.get("text", page.get("page_content", "")) 
+            for page in pages_data
+        ])
         
-        # Ingest into ChromaDB
+        # 2. Get the chunker instance
+        chunker = get_chunker()
+        
+        # 3. ✅ FIXED: Use split_text to output a list of plain strings
+        chunks = chunker.split_text(full_text)
+        
+        # Ingest the string chunks into ChromaDB
         create_vector_store(chunks)
         
         return {
@@ -67,16 +77,20 @@ async def upload_document(file: UploadFile = File(...)):
             detail=f"An error occurred while processing the document: {str(e)}"
         )
 
-# -------------------------------------------------------------------
+## -------------------------------------------------------------------
 # 4. CHAT GENERATION ENDPOINT
 # -------------------------------------------------------------------
 @router.post("/chat", tags=["Generation"])
-async def chat(request: QueryRequest):
+def chat(request: QueryRequest):
     """Passes the validated query to the LangGraph agent for reasoning and retrieval."""
     
     try:
-        # The agent manages the internal thought process
-        response = agent_executor.invoke({"messages": [("user", request.query)]})
+        # We add the recursion_limit config here to force the agent to stop 
+        # if it gets trapped in an infinite tool-calling loop.
+        response = agent_executor.invoke(
+            {"messages": [("user", request.query)]},
+            config={"recursion_limit": 10}
+        )
         
         # Extract the final answer from the agent's last message
         final_answer = response["messages"][-1].content
@@ -88,7 +102,8 @@ async def chat(request: QueryRequest):
         
     except Exception as e:
         logger.error(f"Agent execution failed for query '{request.query}': {str(e)}")
+        # If it hits the 5-loop limit, it raises a GraphRecursionError, which is caught here.
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="The RAG engine encountered an unexpected error during reasoning."
+            detail=f"The RAG engine encountered an unexpected error: {str(e)}"
         )
