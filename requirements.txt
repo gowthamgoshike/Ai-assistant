@@ -36,3 +36,4 @@ transformers>=4.38.0
 # Document Ingestion & Parsing
 pypdf>=4.1.0
 pymupdf>=1.24.0
+pandas>=2.0.0

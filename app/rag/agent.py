@@ -1,83 +1,137 @@
 import os
+from typing import Annotated, Sequence, Literal
+from typing_extensions import TypedDict
 from dotenv import load_dotenv
 
-# 1. Load the hidden .env file into your environment immediately
-load_dotenv()
-
-from typing import Annotated, Sequence
-from typing_extensions import TypedDict
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_ollama import ChatOllama
 from langchain_tavily import TavilySearch
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode
-from app.rag.tools import rag_retriever_tool
-from langchain_core.messages import SystemMessage
 from langgraph.checkpoint.memory import MemorySaver
-# 1. Define the shared state dictionary structure
-class AgentState(TypedDict):
-    messages: Annotated[Sequence[BaseMessage], add_messages]
 
-# 2. Bind the tools to the local reasoning LLM engine
+from app.rag.tools import rag_retriever_tool
+
+load_dotenv()
+
+# -------------------------------------------------------------------
+# 1. STATE DEFINITION
+# -------------------------------------------------------------------
+class WorkflowState(TypedDict):
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+    context: str
+    route: str
+
+# -------------------------------------------------------------------
+# 2. LLM & TOOLS
+# -------------------------------------------------------------------
 llm = ChatOllama(
     model="llama3.1", 
     temperature=0, 
     base_url="http://ollama:11434"
 )
-tools = [
-    rag_retriever_tool, 
-    TavilySearch(max_results=3, tavily_api_key=os.getenv("TAVILY_API_KEY"))
-]
+tavily_search = TavilySearch(max_results=3)
 
-llm_with_tools = llm.bind_tools(tools)
-
-# 2. Update the System Prompt to act as a Router
-def call_model(state: AgentState):
-    """Executes the LLM node logic to generate an output or pick a tool."""
-    messages = state['messages']
+# -------------------------------------------------------------------
+# 3. PROCESSING NODES
+# -------------------------------------------------------------------
+def classifier_node(state: WorkflowState):
+    """Classifies user intent to determine the next graph branch."""
+    last_user_msg = state["messages"][-1].content
     
-    if not any(isinstance(m, SystemMessage) for m in messages):
-        system_prompt = SystemMessage(
-            content="You are a helpful and intelligent assistant.\n\n"
-                    "ROUTING RULES:\n"
-                    "1. CONVERSATION & MEMORY: If the user is greeting you, asking about previous context, or asking personal/conversational questions (e.g., 'What is my name?'), answer directly using conversation history WITHOUT calling any tools.\n"
-                    "2. DOCUMENT QUESTIONS: Use 'rag_retriever_tool' ONLY when the user asks specific questions about their uploaded PDF or document content.\n"
-                    "3. EXTERNAL KNOWLEDGE: Use 'tavily_search_results_json' ONLY for general knowledge, news, or real-time web searches when the document doesn't have the answer.\n\n"
-                    "CRITICAL: Never mention tool names or internal execution steps in your final response."
-        )
-        messages = [system_prompt] + messages
+    router_prompt = (
+        "Classify the user's input into one of three categories:\n"
+        "- 'rag': Questions strictly about uploaded PDF/document contents.\n"
+        "- 'web': Questions requiring real-time info, news, weather, or outside knowledge.\n"
+        "- 'direct': Casual greetings, personal context ('what is my name'), or small talk.\n"
+        "Respond with ONLY one word: 'rag', 'web', or 'direct'."
+    )
+    
+    response = llm.invoke([
+        SystemMessage(content=router_prompt),
+        HumanMessage(content=last_user_msg)
+    ])
+    
+    decision = response.content.strip().lower()
+    if decision not in ["rag", "web", "direct"]:
+        decision = "direct"
+        
+    return {"route": decision}
 
-    response = llm_with_tools.invoke(messages)
+def rag_retrieval_node(state: WorkflowState):
+    """Retrieves document chunks from ChromaDB."""
+    last_user_msg = state["messages"][-1].content
+    docs = rag_retriever_tool.invoke({"query": last_user_msg})
+    return {"context": str(docs)}
+
+def web_search_node(state: WorkflowState):
+    """Performs web search using Tavily."""
+    last_user_msg = state["messages"][-1].content
+    results = tavily_search.invoke({"query": last_user_msg})
+    return {"context": str(results)}
+
+def generate_node(state: WorkflowState):
+    """Synthesizes the final answer using retrieved context."""
+    context = state.get("context", "")
+    messages = list(state["messages"])
+    
+    sys_prompt = SystemMessage(
+        content=f"Answer the user's question directly using the provided context below.\n\n"
+                f"CONTEXT:\n{context}\n\n"
+                f"Do not mention internal context or search tools in your final answer."
+    )
+    
+    response = llm.invoke([sys_prompt] + messages)
     return {"messages": [response]}
 
-# 4. Define Route Condition Edge Logic
-def should_continue(state: AgentState) -> str:
-    """Evaluates if the model wants to call a tool or finish."""
-    last_message = state['messages'][-1]
-    if last_message.tool_calls:
-        return "tools"
-    return END
+def direct_chat_node(state: WorkflowState):
+    """Handles greetings and memory lookup without context retrieval."""
+    messages = list(state["messages"])
+    sys_prompt = SystemMessage(
+        content="You are a helpful assistant. Respond naturally to the user using past conversation history."
+    )
+    response = llm.invoke([sys_prompt] + messages)
+    return {"messages": [response]}
 
-# 5. Build and Compile the State Graph
-workflow = StateGraph(AgentState)
+# -------------------------------------------------------------------
+# 4. CONDITIONAL ROUTER EDGE
+# -------------------------------------------------------------------
+def route_decision(state: WorkflowState) -> Literal["rag_node", "web_node", "direct_node"]:
+    route = state.get("route", "direct")
+    if route == "rag":
+        return "rag_node"
+    elif route == "web":
+        return "web_node"
+    return "direct_node"
 
-# Add processing workers
-workflow.add_node("agent", call_model)
-workflow.add_node("tools", ToolNode(tools))
+# -------------------------------------------------------------------
+# 5. GRAPH ASSEMBLY & COMPILATION
+# -------------------------------------------------------------------
+workflow = StateGraph(WorkflowState)
 
-# Establish layout connectivity
-workflow.add_edge(START, "agent")
+workflow.add_node("classifier", classifier_node)
+workflow.add_node("rag_node", rag_retrieval_node)
+workflow.add_node("web_node", web_search_node)
+workflow.add_node("generate", generate_node)
+workflow.add_node("direct_node", direct_chat_node)
+
+workflow.add_edge(START, "classifier")
+
 workflow.add_conditional_edges(
-    "agent",
-    should_continue,
+    "classifier",
+    route_decision,
     {
-        "tools": "tools",
-        END: END
+        "rag_node": "rag_node",
+        "web_node": "web_node",
+        "direct_node": "direct_node"
     }
 )
-# Initialize the memory buffer
-memory = MemorySaver()
 
-# Compile the execution runtime engine WITH the checkpointer
-agent_executor = workflow.compile(checkpointer=memory)
+workflow.add_edge("rag_node", "generate")
+workflow.add_edge("web_node", "generate")
+
+workflow.add_edge("generate", END)
+workflow.add_edge("direct_node", END)
+
+memory = MemorySaver()
+workflow_agent = workflow.compile(checkpointer=memory)

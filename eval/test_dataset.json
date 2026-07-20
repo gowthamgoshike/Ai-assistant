@@ -1,0 +1,22 @@
+[
+  {
+    "query": "What is the maximum file size supported for PDF uploads?",
+    "ground_truth": "The maximum supported PDF file size is 10 MB.",
+    "expected_route": "rag"
+  },
+  {
+    "query": "Summarize the key findings on transformer attention mechanisms in the document.",
+    "ground_truth": "The document highlights that multi-head attention allows the model to jointly attend to information from different representation subspaces.",
+    "expected_route": "rag"
+  },
+  {
+    "query": "What is 25 * 4?",
+    "ground_truth": "100",
+    "expected_route": "direct_node"
+  },
+  {
+    "query": "What is the latest score of the NBA finals?",
+    "ground_truth": "Real-time sports information requires a web search query.",
+    "expected_route": "web_node"
+  }
+]

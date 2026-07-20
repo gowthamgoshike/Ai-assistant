@@ -1,0 +1,2 @@
+# Ensure these are NOT ignoring your test dataset
+!eval/test_dataset.json
