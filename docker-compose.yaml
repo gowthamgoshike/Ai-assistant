@@ -18,7 +18,21 @@ services:
     restart: unless-stopped
     networks:
       - rag_network
-
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: rag_frontend
+    ports:
+      - "8501:8501"  # Streamlit exposed on 8501
+    environment:
+      # Connects to the backend using the Docker container name and internal port
+      - BACKEND_URL=http://rag_backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - rag_network
   chromadb:
     image: chromadb/chroma
     container_name: rag_vector_db
