@@ -18,7 +18,7 @@ router = APIRouter()
 class QueryRequest(BaseModel):
     # Enforce that the query is at least 3 characters long
     query: str = Field(..., min_length=3, description="The user's question for the AI")
-
+    session_id: str = "test_user_1"
 # -------------------------------------------------------------------
 # 2. HEALTH CHECK ENDPOINT
 # -------------------------------------------------------------------
@@ -80,16 +80,24 @@ async def upload_document(file: UploadFile = File(...)):
 ## -------------------------------------------------------------------
 # 4. CHAT GENERATION ENDPOINT
 # -------------------------------------------------------------------
+# -------------------------------------------------------------------
+# 4. CHAT GENERATION ENDPOINT
+# -------------------------------------------------------------------
 @router.post("/chat", tags=["Generation"])
 def chat(request: QueryRequest):
     """Passes the validated query to the LangGraph agent for reasoning and retrieval."""
     
     try:
-        # We add the recursion_limit config here to force the agent to stop 
-        # if it gets trapped in an infinite tool-calling loop.
+        # Merge both configs: thread_id tells MemorySaver which history to load,
+        # and recursion_limit prevents infinite tool-calling loops.
+        config = {
+            "configurable": {"thread_id": request.session_id},
+            "recursion_limit": 10
+        }
+        
         response = agent_executor.invoke(
             {"messages": [("user", request.query)]},
-            config={"recursion_limit": 10}
+            config=config
         )
         
         # Extract the final answer from the agent's last message
@@ -102,7 +110,7 @@ def chat(request: QueryRequest):
         
     except Exception as e:
         logger.error(f"Agent execution failed for query '{request.query}': {str(e)}")
-        # If it hits the 5-loop limit, it raises a GraphRecursionError, which is caught here.
+        # If it hits the 10-loop limit, it raises a GraphRecursionError, which is caught here.
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"The RAG engine encountered an unexpected error: {str(e)}"

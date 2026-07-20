@@ -14,6 +14,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from app.rag.tools import rag_retriever_tool
 from langchain_core.messages import SystemMessage
+from langgraph.checkpoint.memory import MemorySaver
 # 1. Define the shared state dictionary structure
 class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
@@ -38,12 +39,12 @@ def call_model(state: AgentState):
     
     if not any(isinstance(m, SystemMessage) for m in messages):
         system_prompt = SystemMessage(
-            content="You are a helpful and intelligent assistant. "
-                    "You have access to two tools:\n"
-                    "1. 'rag_retriever_tool': Use this FIRST to answer specific questions about the user's uploaded PDF document.\n"
-                    "2. 'tavily_search_results_json': Use this for general knowledge, up-to-date web searches, or if the PDF lacks the requested information.\n"
-                    "Always rely on the tools to answer the question. "
-                    "CRITICAL: Never mention the tool names or your internal search processes in your final answer. Respond directly and naturally."
+            content="You are a helpful and intelligent assistant.\n\n"
+                    "ROUTING RULES:\n"
+                    "1. CONVERSATION & MEMORY: If the user is greeting you, asking about previous context, or asking personal/conversational questions (e.g., 'What is my name?'), answer directly using conversation history WITHOUT calling any tools.\n"
+                    "2. DOCUMENT QUESTIONS: Use 'rag_retriever_tool' ONLY when the user asks specific questions about their uploaded PDF or document content.\n"
+                    "3. EXTERNAL KNOWLEDGE: Use 'tavily_search_results_json' ONLY for general knowledge, news, or real-time web searches when the document doesn't have the answer.\n\n"
+                    "CRITICAL: Never mention tool names or internal execution steps in your final response."
         )
         messages = [system_prompt] + messages
 
@@ -75,7 +76,8 @@ workflow.add_conditional_edges(
         END: END
     }
 )
-workflow.add_edge("tools", "agent")
+# Initialize the memory buffer
+memory = MemorySaver()
 
-# Compile the execution runtime engine
-agent_executor = workflow.compile()
+# Compile the execution runtime engine WITH the checkpointer
+agent_executor = workflow.compile(checkpointer=memory)
